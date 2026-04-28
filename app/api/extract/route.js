@@ -37,10 +37,10 @@ export async function POST(request) {
 
     console.log('📄 Convirtiendo PDF a imágenes con pdftoppm...')
 
-    // Convertir PDF a imágenes PNG usando pdftoppm
+    // Convertir PDF a imágenes PNG usando pdftoppm con ALTA resolución
     const outputPrefix = join(tempDir, `page_${timestamp}`)
     try {
-      execSync(`pdftoppm -png -r 200 "${pdfPath}" "${outputPrefix}"`)
+      execSync(`pdftoppm -png -r 300 "${pdfPath}" "${outputPrefix}"`)
       console.log('✓ pdftoppm ejecutado correctamente')
     } catch (execError) {
       console.error('Error ejecutando pdftoppm:', execError)
@@ -65,6 +65,8 @@ export async function POST(request) {
     const imageMessages = imagePaths.map(path => {
       const imageBuffer = readFileSync(path)
       const base64 = imageBuffer.toString('base64')
+      const sizeKB = (imageBuffer.length / 1024).toFixed(2)
+      console.log(`📷 Imagen: ${path.split('/').pop()} - Tamaño: ${sizeKB} KB`)
       return {
         type: 'image_url',
         image_url: {
@@ -74,23 +76,26 @@ export async function POST(request) {
       }
     })
 
-    const prompt = `Analiza estas imágenes de factura y extrae TODOS los productos de TODAS las páginas.
+    const prompt = `Analiza CUIDADOSAMENTE estas ${imagePaths.length} imágenes de factura y extrae ABSOLUTAMENTE TODOS los productos de TODAS las páginas.
+
+CRÍTICO: Debes extraer CADA FILA de la tabla de productos. NO omitas ninguna fila.
 
 INSTRUCCIONES:
-1. Busca la tabla de productos en cada imagen
-2. Identifica las columnas (pueden variar):
+1. Lee CADA imagen completamente de arriba a abajo
+2. Busca la tabla de productos en cada imagen
+3. Identifica las columnas (pueden variar):
    - Código | Descripción | Cant. | Precio | Total
    - Precio | Descripción | Cantidad | Pedido | Total (usa "Pedido" como cantidad)
    - Código | Productos | Unidad | Cant | Precio | Total
-3. Extrae TODOS los productos que veas
-4. Solo extrae descripción, cantidad y precio
+4. Extrae CADA FILA de la tabla, sin omitir ninguna
+5. Solo extrae descripción, cantidad y precio
 
-REGLAS CRÍTICAS:
+REGLAS:
 - La CANTIDAD es un número entero (15, 100, 1200)
 - El PRECIO es un decimal en DÓLARES (0.70, 2.50, 55.00)
 - Si hay columna "Pedido", esa es la cantidad
-- Lee CUIDADOSAMENTE cada fila de la tabla
-- NO inventes datos
+- Lee TODAS las filas hasta el final de cada página
+- NO te detengas hasta leer todo
 
 FORMATO JSON:
 {
@@ -103,7 +108,7 @@ FORMATO JSON:
   ]
 }
 
-Extrae TODOS los productos de TODAS las imágenes.`
+IMPORTANTE: Extrae TODOS los productos, no solo los primeros. Revisa cada imagen completamente.`
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -120,6 +125,8 @@ Extrae TODOS los productos de TODAS las imágenes.`
       ],
       max_tokens: 16000
     })
+
+    console.log(`🤖 Tokens usados: ${response.usage.total_tokens} (prompt: ${response.usage.prompt_tokens}, completion: ${response.usage.completion_tokens})`)
 
     let resultado
     try {
