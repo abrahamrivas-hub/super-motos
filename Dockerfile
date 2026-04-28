@@ -1,7 +1,9 @@
-FROM node:18-alpine
+FROM node:18-slim
 
 # Instalar poppler-utils (contiene pdftoppm)
-RUN apk add --no-cache poppler-utils
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
