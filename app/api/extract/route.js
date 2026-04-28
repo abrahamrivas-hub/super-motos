@@ -76,26 +76,26 @@ export async function POST(request) {
       }
     })
 
-    const prompt = `Analiza CUIDADOSAMENTE estas ${imagePaths.length} imágenes de factura y extrae ABSOLUTAMENTE TODOS los productos de TODAS las páginas.
+    const prompt = `Eres un experto extrayendo datos de facturas. Analiza METICULOSAMENTE estas ${imagePaths.length} imágenes y extrae CADA PRODUCTO de la tabla.
 
-CRÍTICO: Debes extraer CADA FILA de la tabla de productos. NO omitas ninguna fila.
+PROCESO:
+1. Examina CADA imagen de arriba a abajo
+2. Localiza la tabla de productos
+3. Lee CADA FILA de la tabla sin omitir ninguna
+4. Para cada fila, extrae: descripción, cantidad y precio
 
-INSTRUCCIONES:
-1. Lee CADA imagen completamente de arriba a abajo
-2. Busca la tabla de productos en cada imagen
-3. Identifica las columnas (pueden variar):
-   - Código | Descripción | Cant. | Precio | Total
-   - Precio | Descripción | Cantidad | Pedido | Total (usa "Pedido" como cantidad)
-   - Código | Productos | Unidad | Cant | Precio | Total
-4. Extrae CADA FILA de la tabla, sin omitir ninguna
-5. Solo extrae descripción, cantidad y precio
+FORMATOS DE COLUMNAS POSIBLES:
+- Código | Descripción | Cant. | Precio | Total
+- Precio | Descripción | Cantidad | Pedido | Total → usa "Pedido" como cantidad
+- Código | Productos | Unidad | Cant | Precio | Total
 
-REGLAS:
-- La CANTIDAD es un número entero (15, 100, 1200)
-- El PRECIO es un decimal en DÓLARES (0.70, 2.50, 55.00)
-- Si hay columna "Pedido", esa es la cantidad
-- Lee TODAS las filas hasta el final de cada página
-- NO te detengas hasta leer todo
+REGLAS CRÍTICAS:
+- CANTIDAD: número entero (ej: 15, 100, 1200)
+- PRECIO: decimal en dólares (ej: 0.70, 2.50, 55.00)
+- Si ves "Pedido", esa columna es la cantidad
+- Lee con PRECISIÓN cada número
+- NO aproximes, usa los valores exactos
+- Extrae TODOS los productos hasta el final de cada página
 
 FORMATO JSON:
 {
@@ -108,7 +108,7 @@ FORMATO JSON:
   ]
 }
 
-IMPORTANTE: Extrae TODOS los productos, no solo los primeros. Revisa cada imagen completamente.`
+VERIFICA: Que hayas extraído TODOS los productos de TODAS las imágenes antes de responder.`
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
