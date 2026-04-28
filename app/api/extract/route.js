@@ -39,15 +39,23 @@ export async function POST(request) {
 
     // Convertir PDF a imágenes PNG usando pdftoppm
     const outputPrefix = join(tempDir, `page_${timestamp}`)
-    execSync(`pdftoppm -png -r 200 "${pdfPath}" "${outputPrefix}"`)
+    try {
+      execSync(`pdftoppm -png -r 200 "${pdfPath}" "${outputPrefix}"`)
+      console.log('✓ pdftoppm ejecutado correctamente')
+    } catch (execError) {
+      console.error('Error ejecutando pdftoppm:', execError)
+      throw new Error('No se pudo convertir PDF a imágenes. pdftoppm falló.')
+    }
 
     // Leer las imágenes generadas
     const files = readdirSync(tempDir).filter(f => f.startsWith(`page_${timestamp}`) && f.endsWith('.png'))
     imagePaths = files.map(f => join(tempDir, f))
 
     console.log(`✓ ${imagePaths.length} página(s) convertida(s)`)
+    console.log(`📁 Archivos generados: ${files.join(', ')}`)
 
     if (imagePaths.length === 0) {
+      console.error('❌ No se generaron imágenes. Archivos en temp:', readdirSync(tempDir))
       throw new Error('No se pudo convertir el PDF a imágenes')
     }
 
@@ -116,6 +124,7 @@ Extrae TODOS los productos de TODAS las imágenes.`
     let resultado
     try {
       resultado = JSON.parse(response.choices[0].message.content)
+      console.log(`📊 GPT extrajo ${resultado.productos.length} productos`)
     } catch (parseError) {
       console.error('Error parseando JSON de GPT:', parseError)
       console.error('Respuesta de GPT:', response.choices[0].message.content.slice(0, 500))
