@@ -4,13 +4,13 @@ import { writeFileSync, unlinkSync, readdirSync, readFileSync, mkdirSync, exists
 import { join } from 'path'
 import { execSync } from 'child_process'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: 120000,
-  maxRetries: 1,
-})
-
 export async function POST(request) {
+  // Inicializar OpenAI aquí para evitar error en build time
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: 120000,
+    maxRetries: 1,
+  })
   const tempDir = join(process.cwd(), 'temp')
   let pdfPath = null
   let imagePaths = []

@@ -8,14 +8,9 @@
     "start": "next start"
   },
   "dependencies": {
-    "graphicsmagick": "^0.0.1",
     "next": "14.0.4",
     "openai": "^4.20.1",
-    "pdf-lib": "^1.17.1",
-    "pdf-parse": "^1.1.4",
-    "pdf-to-png-converter": "^4.0.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "supports-color": "^10.2.2"
+    "react-dom": "^18.2.0"
   }
 }
