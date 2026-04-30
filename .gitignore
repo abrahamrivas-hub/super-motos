@@ -35,5 +35,7 @@ next-env.d.ts
 
 # temp
 /temp
+/PDF
 debug_*.txt
 debug_*.json
+.vscode/

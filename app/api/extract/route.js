@@ -1,191 +1,168 @@
 import { NextResponse } from 'next/server'
 import OpenAI from 'openai'
-import { writeFileSync, unlinkSync, readdirSync, readFileSync, mkdirSync, existsSync } from 'fs'
+import { writeFileSync, unlinkSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 
 export async function POST(request) {
-  // Inicializar OpenAI aquí para evitar error en build time
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    timeout: 120000,
-    maxRetries: 1,
-  })
-  const tempDir = join(process.cwd(), 'temp')
-  let pdfPath = null
-  let imagePaths = []
-
-  try {
-    const formData = await request.formData()
-    const file = formData.get('pdf')
-
-    if (!file) {
-      return NextResponse.json({ error: 'No se proporcionó archivo PDF' }, { status: 400 })
-    }
-
-    // Crear directorio temporal
-    if (!existsSync(tempDir)) {
-      mkdirSync(tempDir, { recursive: true })
-    }
-
-    // Guardar PDF temporalmente
-    const bytes = await file.arrayBuffer()
-    const buffer = Buffer.from(bytes)
-    const timestamp = Date.now()
-    pdfPath = join(tempDir, `temp_${timestamp}.pdf`)
-    writeFileSync(pdfPath, buffer)
-
-    console.log('📄 Convirtiendo PDF a imágenes con pdftoppm...')
-
-    // Convertir PDF a imágenes PNG usando pdftoppm con ALTA resolución
-    const outputPrefix = join(tempDir, `page_${timestamp}`)
-    try {
-      execSync(`pdftoppm -png -r 300 "${pdfPath}" "${outputPrefix}"`)
-      console.log('✓ pdftoppm ejecutado correctamente')
-    } catch (execError) {
-      console.error('Error ejecutando pdftoppm:', execError)
-      throw new Error('No se pudo convertir PDF a imágenes. pdftoppm falló.')
-    }
-
-    // Leer las imágenes generadas
-    const files = readdirSync(tempDir).filter(f => f.startsWith(`page_${timestamp}`) && f.endsWith('.png'))
-    imagePaths = files.map(f => join(tempDir, f))
-
-    console.log(`✓ ${imagePaths.length} página(s) convertida(s)`)
-    console.log(`📁 Archivos generados: ${files.join(', ')}`)
-
-    if (imagePaths.length === 0) {
-      console.error('❌ No se generaron imágenes. Archivos en temp:', readdirSync(tempDir))
-      throw new Error('No se pudo convertir el PDF a imágenes')
-    }
-
-    console.log('🔍 Extrayendo datos con GPT-4o Vision...')
-
-    // Convertir imágenes a base64
-    const imageMessages = imagePaths.map(path => {
-      const imageBuffer = readFileSync(path)
-      const base64 = imageBuffer.toString('base64')
-      const sizeKB = (imageBuffer.length / 1024).toFixed(2)
-      console.log(`📷 Imagen: ${path.split('/').pop()} - Tamaño: ${sizeKB} KB`)
-      return {
-        type: 'image_url',
-        image_url: {
-          url: `data:image/png;base64,${base64}`,
-          detail: 'high'
-        }
+  const encoder = new TextEncoder()
+  
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendEvent = (data) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
       }
-    })
 
-    const prompt = `Eres un experto extrayendo datos de facturas. Analiza METICULOSAMENTE estas ${imagePaths.length} imágenes y extrae CADA PRODUCTO de la tabla.
-
-PROCESO:
-1. Examina CADA imagen de arriba a abajo
-2. Localiza la tabla de productos
-3. Lee CADA FILA de la tabla sin omitir ninguna
-4. Para cada fila, extrae: descripción, cantidad y precio
-
-FORMATOS DE COLUMNAS POSIBLES:
-- Código | Descripción | Cant. | Precio | Total
-- Precio | Descripción | Cantidad | Pedido | Total → usa "Pedido" como cantidad
-- Código | Productos | Unidad | Cant | Precio | Total
-
-REGLAS CRÍTICAS:
-- CANTIDAD: número entero (ej: 15, 100, 1200)
-- PRECIO: decimal en dólares (ej: 0.70, 2.50, 55.00)
-- Si ves "Pedido", esa columna es la cantidad
-- Lee con PRECISIÓN cada número
-- NO aproximes, usa los valores exactos
-- Extrae TODOS los productos hasta el final de cada página
-
-FORMATO JSON:
-{
-  "productos": [
-    {
-      "descripcion": "BASTONES DELANTEROS TX200",
-      "cantidad": 15,
-      "precio": 55.00
-    }
-  ]
-}
-
-VERIFICA: Que hayas extraído TODOS los productos de TODAS las imágenes antes de responder.`
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: 'text', text: prompt },
-            ...imageMessages
-          ]
-        }
-      ],
-      max_tokens: 16000
-    })
-
-    console.log(`🤖 Tokens usados: ${response.usage.total_tokens} (prompt: ${response.usage.prompt_tokens}, completion: ${response.usage.completion_tokens})`)
-
-    let resultado
-    try {
-      resultado = JSON.parse(response.choices[0].message.content)
-      console.log(`📊 GPT extrajo ${resultado.productos.length} productos`)
-    } catch (parseError) {
-      console.error('Error parseando JSON de GPT:', parseError)
-      console.error('Respuesta de GPT:', response.choices[0].message.content.slice(0, 500))
-      throw new Error('GPT devolvió JSON inválido. Intenta de nuevo.')
-    }
-    
-    // Procesar productos
-    const productos = resultado.productos.map(p => {
-      const cantidad = parseFloat(p.cantidad)
-      const precio = parseFloat(p.precio)
-      
-      if (isNaN(cantidad) || isNaN(precio) || cantidad <= 0 || precio <= 0) {
-        return null
-      }
-      
-      const total = cantidad * precio
-      
-      return {
-        descripcion: p.descripcion,
-        cantidad: cantidad.toString(),
-        precio: precio.toFixed(2),
-        total: total.toFixed(2)
-      }
-    }).filter(p => p !== null)
-
-    console.log(`✓ Productos extraídos: ${productos.length}`)
-
-    const totalGeneral = productos.reduce((sum, p) => sum + parseFloat(p.total), 0)
-
-    return NextResponse.json({
-      productos,
-      total_general: totalGeneral.toFixed(2),
-      moneda: '$'
-    })
-
-  } catch (error) {
-    console.error('Error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Error al procesar el PDF' },
-      { status: 500 }
-    )
-  } finally {
-    // Limpiar archivos temporales
-    try {
-      if (pdfPath && existsSync(pdfPath)) unlinkSync(pdfPath)
-      imagePaths.forEach(path => {
-        try { 
-          if (existsSync(path)) unlinkSync(path) 
-        } catch (e) {}
+      const openai = new OpenAI({
+        apiKey: process.env.DEEPSEEK_API_KEY,
+        baseURL: 'https://api.deepseek.com',
+        timeout: 300000,
+        maxRetries: 3,
       })
-    } catch (e) {
-      console.error('Error limpiando archivos temporales:', e)
+      
+      const tempDir = join(process.cwd(), 'temp')
+      let pdfPath = null
+
+      try {
+        const formData = await request.formData()
+        const file = formData.get('pdf')
+
+        if (!file) {
+          sendEvent({ error: 'No se proporcionó archivo PDF' })
+          controller.close()
+          return
+        }
+
+        sendEvent({ status: 'Guardando PDF...' })
+
+        if (!existsSync(tempDir)) {
+          mkdirSync(tempDir, { recursive: true })
+        }
+
+        const bytes = await file.arrayBuffer()
+        const buffer = Buffer.from(bytes)
+        const timestamp = Date.now()
+        pdfPath = join(tempDir, `temp_${timestamp}.pdf`)
+        writeFileSync(pdfPath, buffer)
+
+        sendEvent({ status: 'Extrayendo texto del PDF...' })
+
+        let textoCompleto = ''
+        try {
+          textoCompleto = execSync(`pdftotext -layout "${pdfPath}" -`, { encoding: 'utf8' })
+          sendEvent({ status: `Texto extraído (${textoCompleto.length} caracteres)` })
+        } catch (pdfError) {
+          sendEvent({ error: 'No se pudo extraer texto del PDF' })
+          controller.close()
+          return
+        }
+
+        if (!textoCompleto || textoCompleto.trim().length === 0) {
+          sendEvent({ error: 'El PDF no contiene texto extraíble' })
+          controller.close()
+          return
+        }
+
+        sendEvent({ status: 'Procesando con DeepSeek...' })
+
+        const prompt = `Extrae TODOS los productos de esta factura. Lee cada línea cuidadosamente.
+
+${textoCompleto}
+
+Responde SOLO con JSON válido:
+{"productos": [{"descripcion": "nombre", "cantidad": 10, "precio": 5.50}]}`
+
+        let response
+        try {
+          response = await openai.chat.completions.create({
+            model: "deepseek-chat",
+            messages: [{ role: "user", content: prompt }],
+            stream: false,
+            temperature: 0
+          })
+        } catch (apiError) {
+          console.error('Error API:', apiError)
+          sendEvent({ error: `Error de API: ${apiError.message}` })
+          controller.close()
+          return
+        }
+
+        sendEvent({ status: 'Procesando respuesta...' })
+
+        let resultado
+        try {
+          const content = response.choices[0].message.content
+          // Intentar extraer JSON si viene con texto adicional
+          const jsonMatch = content.match(/\{[\s\S]*\}/)
+          const jsonStr = jsonMatch ? jsonMatch[0] : content
+          resultado = JSON.parse(jsonStr)
+          sendEvent({ status: `Extraídos ${resultado.productos?.length || 0} productos` })
+        } catch (parseError) {
+          console.error('Error parseando:', parseError)
+          console.error('Respuesta:', response.choices[0].message.content.substring(0, 500))
+          sendEvent({ error: 'Error procesando respuesta de DeepSeek' })
+          controller.close()
+          return
+        }
+        
+        if (!resultado.productos || resultado.productos.length === 0) {
+          sendEvent({ error: 'No se encontraron productos en el PDF' })
+          controller.close()
+          return
+        }
+
+        const productos = resultado.productos.map(p => {
+          const cantidad = parseFloat(p.cantidad)
+          const precio = parseFloat(p.precio)
+          
+          if (isNaN(cantidad) || isNaN(precio) || cantidad <= 0 || precio <= 0) {
+            return null
+          }
+          
+          const total = cantidad * precio
+          
+          return {
+            descripcion: p.descripcion,
+            cantidad: cantidad.toString(),
+            precio: precio.toFixed(2),
+            total: total.toFixed(2)
+          }
+        }).filter(p => p !== null)
+
+        const totalGeneral = productos.reduce((sum, p) => sum + parseFloat(p.total), 0)
+
+        sendEvent({ 
+          status: 'Completado',
+          result: {
+            productos,
+            total_general: totalGeneral.toFixed(2),
+            moneda: 'USD'
+          }
+        })
+
+        if (pdfPath && existsSync(pdfPath)) unlinkSync(pdfPath)
+        controller.close()
+
+      } catch (error) {
+        console.error('Error general:', error)
+        sendEvent({ error: error.message || 'Error al procesar el PDF' })
+        
+        try {
+          if (pdfPath && existsSync(pdfPath)) unlinkSync(pdfPath)
+        } catch (e) {}
+        
+        controller.close()
+      }
     }
-  }
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  })
 }
 
 export const maxDuration = 60
