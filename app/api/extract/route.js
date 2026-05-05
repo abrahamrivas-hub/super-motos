@@ -16,8 +16,8 @@ export async function POST(request) {
       const openai = new OpenAI({
         apiKey: process.env.DEEPSEEK_API_KEY,
         baseURL: 'https://api.deepseek.com',
-        timeout: 300000,
-        maxRetries: 3,
+        timeout: 120000, // 2 minutos
+        maxRetries: 0, // Manejamos los reintentos manualmente
       })
       
       const tempDir = join(process.cwd(), 'temp')
@@ -73,34 +73,87 @@ Responde SOLO con JSON válido:
 {"productos": [{"descripcion": "nombre", "cantidad": 10, "precio": 5.50}]}`
 
         let response
-        try {
-          response = await openai.chat.completions.create({
-            model: "deepseek-chat",
-            messages: [{ role: "user", content: prompt }],
-            stream: false,
-            temperature: 0
-          })
-        } catch (apiError) {
-          console.error('Error API:', apiError)
-          sendEvent({ error: `Error de API: ${apiError.message}` })
-          controller.close()
-          return
+        let intentos = 0
+        const maxIntentos = 3
+        
+        while (intentos < maxIntentos) {
+          try {
+            intentos++
+            if (intentos > 1) {
+              sendEvent({ status: `Reintentando... (${intentos}/${maxIntentos})` })
+              await new Promise(resolve => setTimeout(resolve, 2000 * intentos))
+            }
+            
+            // Usar streaming para evitar timeouts con respuestas largas
+            const stream = await openai.chat.completions.create({
+              model: "deepseek-chat",
+              messages: [{ role: "user", content: prompt }],
+              stream: true,
+              temperature: 0,
+              max_tokens: 9000
+            })
+            
+            // Recolectar la respuesta completa del stream
+            let fullContent = ''
+            for await (const chunk of stream) {
+              const content = chunk.choices[0]?.delta?.content || ''
+              fullContent += content
+            }
+            
+            // Crear objeto de respuesta compatible
+            response = {
+              choices: [{
+                message: {
+                  content: fullContent
+                }
+              }]
+            }
+            
+            // Si llegamos aquí, la llamada fue exitosa
+            break
+            
+          } catch (apiError) {
+            console.error(`Error API (intento ${intentos}):`, apiError)
+            
+            if (intentos >= maxIntentos) {
+              sendEvent({ error: `Error de API después de ${maxIntentos} intentos. Por favor, intenta de nuevo.` })
+              controller.close()
+              return
+            }
+          }
         }
 
         sendEvent({ status: 'Procesando respuesta...' })
 
         let resultado
         try {
-          const content = response.choices[0].message.content
+          let content = response.choices[0].message.content
+          
+          // Limpiar markdown y texto adicional
+          content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+          content = content.trim()
+          
           // Intentar extraer JSON si viene con texto adicional
           const jsonMatch = content.match(/\{[\s\S]*\}/)
-          const jsonStr = jsonMatch ? jsonMatch[0] : content
+          let jsonStr = jsonMatch ? jsonMatch[0] : content
+          
+          // Si el JSON está incompleto, intentar repararlo
+          if (!jsonStr.endsWith('}')) {
+            // Buscar el último producto completo
+            const lastCompleteProduct = jsonStr.lastIndexOf('},')
+            if (lastCompleteProduct > 0) {
+              jsonStr = jsonStr.substring(0, lastCompleteProduct + 1) + ']}'
+            } else {
+              jsonStr = jsonStr + ']}'
+            }
+          }
+          
           resultado = JSON.parse(jsonStr)
           sendEvent({ status: `Extraídos ${resultado.productos?.length || 0} productos` })
         } catch (parseError) {
           console.error('Error parseando:', parseError)
           console.error('Respuesta:', response.choices[0].message.content.substring(0, 500))
-          sendEvent({ error: 'Error procesando respuesta de DeepSeek' })
+          sendEvent({ error: 'Error procesando respuesta. Intenta con un PDF más pequeño.' })
           controller.close()
           return
         }

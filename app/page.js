@@ -9,6 +9,54 @@ export default function Home() {
   const [error, setError] = useState(null)
   const [status, setStatus] = useState('')
 
+  const downloadExcel = async (resultData) => {
+    try {
+      setStatus('Generando Excel...')
+      
+      const response = await fetch('/api/download-excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(resultData)
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Error al descargar Excel:', errorText)
+        setError('Error al generar el archivo Excel')
+        return
+      }
+
+      const blob = await response.blob()
+      
+      // Verificar que el blob tiene contenido
+      if (blob.size === 0) {
+        console.error('El archivo Excel está vacío')
+        setError('El archivo generado está vacío')
+        return
+      }
+
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `factura_${Date.now()}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      
+      // Limpiar después de un pequeño delay
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
+      }, 100)
+      
+      setStatus('Excel descargado exitosamente')
+    } catch (error) {
+      console.error('Error descargando Excel:', error)
+      setError(`Error al descargar: ${error.message}`)
+    }
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!file) return
@@ -54,6 +102,8 @@ export default function Home() {
             if (data.result) {
               setResult(data.result)
               setLoading(false)
+              // Descargar automáticamente el Excel
+              downloadExcel(data.result)
             }
           }
         }
@@ -222,6 +272,78 @@ export default function Home() {
                     Total General
                   </div>
                 </div>
+              </div>
+
+              {/* Download Buttons */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '15px',
+                marginBottom: '30px'
+              }}>
+                <button
+                  onClick={() => downloadExcel(result)}
+                  style={{
+                    padding: '18px',
+                    fontSize: '1.1rem',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: 'linear-gradient(135deg, #00d4ff 0%, #0f3460 100%)',
+                    border: 'none',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s',
+                    boxShadow: '0 4px 15px rgba(0, 212, 255, 0.4)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)'
+                    e.currentTarget.style.boxShadow = '0 6px 20px rgba(0, 212, 255, 0.6)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)'
+                    e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 212, 255, 0.4)'
+                  }}
+                >
+                  📥 Descargar Excel
+                </button>
+
+                <button
+                  onClick={() => {
+                    const dataStr = JSON.stringify(result, null, 2)
+                    const dataBlob = new Blob([dataStr], { type: 'application/json' })
+                    const url = window.URL.createObjectURL(dataBlob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = `factura_${Date.now()}.json`
+                    document.body.appendChild(a)
+                    a.click()
+                    setTimeout(() => {
+                      window.URL.revokeObjectURL(url)
+                      document.body.removeChild(a)
+                    }, 100)
+                  }}
+                  style={{
+                    padding: '18px',
+                    fontSize: '1.1rem',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: 'linear-gradient(135deg, #16213e 0%, #0f3460 100%)',
+                    border: '2px solid #00d4ff',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)'
+                    e.currentTarget.style.background = 'linear-gradient(135deg, #1a2a4e 0%, #0f3460 100%)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)'
+                    e.currentTarget.style.background = 'linear-gradient(135deg, #16213e 0%, #0f3460 100%)'
+                  }}
+                >
+                  📄 Descargar JSON
+                </button>
               </div>
 
               {/* Products Table */}
