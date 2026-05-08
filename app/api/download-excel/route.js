@@ -46,6 +46,18 @@ export async function POST(request) {
       worksheet[`H${rowNum}`] = { f: `IF(G${rowNum}>0.01,"⚠️ Revisar","✓")` } // Estado
     })
 
+    // Aplicar formato de número con separadores de miles a las columnas numéricas
+    const numFmt = '#,##0.00' // Formato con separador de miles y 2 decimales
+    productos.forEach((prod, index) => {
+      const rowNum = index + 2
+      // Aplicar formato a cantidad, precio, total, fórmulas
+      if (worksheet[`C${rowNum}`]) worksheet[`C${rowNum}`].z = numFmt
+      if (worksheet[`D${rowNum}`]) worksheet[`D${rowNum}`].z = numFmt
+      if (worksheet[`E${rowNum}`]) worksheet[`E${rowNum}`].z = numFmt
+      if (worksheet[`F${rowNum}`]) worksheet[`F${rowNum}`].z = numFmt
+      if (worksheet[`G${rowNum}`]) worksheet[`G${rowNum}`].z = numFmt
+    })
+
     // Fila de totales
     const totalRow = productos.length + 2
     XLSX.utils.sheet_add_aoa(worksheet, [[
@@ -56,9 +68,9 @@ export async function POST(request) {
     ]], { origin: `A${totalRow}` })
     
     // Fórmulas para totales
-    worksheet[`E${totalRow}`] = { f: `SUM(E2:E${totalRow - 1})` } // Total Extraído
-    worksheet[`F${totalRow}`] = { f: `SUM(F2:F${totalRow - 1})` } // Cant × Precio
-    worksheet[`G${totalRow}`] = { f: `ABS(E${totalRow}-F${totalRow})` } // Diferencia
+    worksheet[`E${totalRow}`] = { f: `SUM(E2:E${totalRow - 1})`, z: numFmt } // Total Extraído
+    worksheet[`F${totalRow}`] = { f: `SUM(F2:F${totalRow - 1})`, z: numFmt } // Cant × Precio
+    worksheet[`G${totalRow}`] = { f: `ABS(E${totalRow}-F${totalRow})`, z: numFmt } // Diferencia
     worksheet[`H${totalRow}`] = { f: `IF(G${totalRow}>0.01,"⚠️ Revisar","✓")` } // Estado
 
     // Ajustar ancho de columnas

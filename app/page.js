@@ -8,6 +8,15 @@ export default function Home() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState('')
+  const [partialProducts, setPartialProducts] = useState([])
+  const [currentPage, setCurrentPage] = useState(null)
+
+  // Función para formatear números con separadores de miles
+  const formatNumber = (num) => {
+    const number = parseFloat(num)
+    if (isNaN(number)) return num
+    return number.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
 
   const downloadExcel = async (resultData) => {
     try {
@@ -64,6 +73,8 @@ export default function Home() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setPartialProducts([])
+    setCurrentPage(null)
     setStatus('Iniciando...')
 
     const formData = new FormData()
@@ -99,9 +110,17 @@ export default function Home() {
               setStatus(data.status)
             }
             
+            // Mostrar productos parciales en tiempo real
+            if (data.partialResult) {
+              setPartialProducts(data.partialResult.productos)
+              setCurrentPage({ current: data.partialResult.pagina, total: data.partialResult.totalPaginas })
+            }
+            
             if (data.result) {
               setResult(data.result)
               setLoading(false)
+              setPartialProducts([])
+              setCurrentPage(null)
               // Descargar automáticamente el Excel
               downloadExcel(data.result)
             }
@@ -115,20 +134,34 @@ export default function Home() {
   }
 
   return (
-    <div style={{ 
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
-      padding: '40px 20px'
-    }}>
+    <>
+      <style jsx global>{`
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
+      
       <div style={{ 
-        maxWidth: '1400px', 
-        margin: '0 auto',
-        background: '#1e1e1e',
-        borderRadius: '20px',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-        overflow: 'hidden',
-        border: '1px solid #2a2a2a'
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+        padding: '40px 20px'
       }}>
+        <div style={{ 
+          maxWidth: '1400px', 
+          margin: '0 auto',
+          background: '#1e1e1e',
+          borderRadius: '20px',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+          overflow: 'hidden',
+          border: '1px solid #2a2a2a'
+        }}>
         {/* Header */}
         <div style={{
           background: 'linear-gradient(135deg, #0f3460 0%, #16213e 100%)',
@@ -240,6 +273,139 @@ export default function Home() {
             </div>
           )}
 
+          {/* Partial Results (Real-time) */}
+          {loading && partialProducts.length > 0 && (
+            <div>
+              {/* Progress Indicator */}
+              {currentPage && (
+                <div style={{
+                  background: 'linear-gradient(135deg, #0f3460 0%, #16213e 100%)',
+                  padding: '20px',
+                  borderRadius: '12px',
+                  marginBottom: '20px',
+                  color: 'white',
+                  textAlign: 'center',
+                  border: '2px solid #00d4ff'
+                }}>
+                  <div style={{ fontSize: '1.2rem', fontWeight: '600', color: '#00d4ff' }}>
+                    📄 Procesando página {currentPage.current} de {currentPage.total}
+                  </div>
+                  <div style={{ fontSize: '0.9rem', marginTop: '8px', color: '#b0b0b0' }}>
+                    {partialProducts.length} productos encontrados hasta ahora
+                  </div>
+                </div>
+              )}
+
+              {/* Partial Products Table */}
+              <div style={{
+                overflowX: 'auto',
+                borderRadius: '15px',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.3)',
+                border: '2px solid #00d4ff',
+                marginBottom: '30px'
+              }}>
+                <table style={{ 
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  background: '#2a2a2a'
+                }}>
+                  <thead>
+                    <tr style={{ 
+                      background: 'linear-gradient(135deg, #0f3460 0%, #16213e 100%)',
+                      color: 'white',
+                      borderBottom: '2px solid #00d4ff'
+                    }}>
+                      <th style={{ 
+                        padding: '18px',
+                        textAlign: 'left',
+                        fontWeight: '600',
+                        fontSize: '1rem',
+                        color: '#00d4ff'
+                      }}>
+                        Descripción
+                      </th>
+                      <th style={{ 
+                        padding: '18px',
+                        textAlign: 'right',
+                        fontWeight: '600',
+                        fontSize: '1rem',
+                        color: '#00d4ff'
+                      }}>
+                        Cantidad
+                      </th>
+                      <th style={{ 
+                        padding: '18px',
+                        textAlign: 'right',
+                        fontWeight: '600',
+                        fontSize: '1rem',
+                        color: '#00d4ff'
+                      }}>
+                        Precio
+                      </th>
+                      <th style={{ 
+                        padding: '18px',
+                        textAlign: 'right',
+                        fontWeight: '600',
+                        fontSize: '1rem',
+                        color: '#00d4ff'
+                      }}>
+                        Total
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {partialProducts.map((prod, idx) => (
+                      <tr 
+                        key={idx}
+                        style={{ 
+                          borderBottom: '1px solid #3a3a3a',
+                          background: idx % 2 === 0 ? '#2a2a2a' : '#1e1e1e',
+                          transition: 'background 0.2s',
+                          animation: 'fadeIn 0.3s ease-in'
+                        }}
+                      >
+                        <td style={{ 
+                          padding: '16px',
+                          fontSize: '0.95rem',
+                          color: '#e0e0e0'
+                        }}>
+                          {prod.descripcion}
+                        </td>
+                        <td style={{ 
+                          padding: '16px',
+                          textAlign: 'right',
+                          fontWeight: '500',
+                          fontSize: '0.95rem',
+                          color: '#e0e0e0'
+                        }}>
+                          {formatNumber(prod.cantidad)}
+                        </td>
+                        <td style={{ 
+                          padding: '16px',
+                          textAlign: 'right',
+                          fontWeight: '500',
+                          fontSize: '0.95rem',
+                          color: '#e0e0e0'
+                        }}>
+                          ${formatNumber(prod.precio)}
+                        </td>
+                        <td style={{ 
+                          padding: '16px',
+                          textAlign: 'right',
+                          fontWeight: '600',
+                          color: '#00d4ff',
+                          fontSize: '0.95rem'
+                        }}>
+                          ${formatNumber(prod.total)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Results */}
           {result && (
             <div>
@@ -266,7 +432,7 @@ export default function Home() {
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: '2.5rem', fontWeight: '700', color: '#00d4ff' }}>
-                    ${result.total_general}
+                    ${formatNumber(result.total_general)}
                   </div>
                   <div style={{ fontSize: '1rem', opacity: 0.9, color: '#b0b0b0' }}>
                     Total General
@@ -428,7 +594,7 @@ export default function Home() {
                           fontSize: '0.95rem',
                           color: '#e0e0e0'
                         }}>
-                          {prod.cantidad}
+                          {formatNumber(prod.cantidad)}
                         </td>
                         <td style={{ 
                           padding: '16px',
@@ -437,7 +603,7 @@ export default function Home() {
                           fontSize: '0.95rem',
                           color: '#e0e0e0'
                         }}>
-                          ${prod.precio}
+                          ${formatNumber(prod.precio)}
                         </td>
                         <td style={{ 
                           padding: '16px',
@@ -446,7 +612,7 @@ export default function Home() {
                           color: '#00d4ff',
                           fontSize: '0.95rem'
                         }}>
-                          ${prod.total}
+                          ${formatNumber(prod.total)}
                         </td>
                       </tr>
                     ))}
@@ -457,6 +623,7 @@ export default function Home() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </>
   )
 }

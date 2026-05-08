@@ -47,147 +47,173 @@ export async function POST(request) {
 
         sendEvent({ status: 'Extrayendo texto del PDF...' })
 
-        let textoCompleto = ''
+        // Obtener número de páginas
+        let numPaginas = 1
         try {
-          textoCompleto = execSync(`pdftotext -layout "${pdfPath}" -`, { encoding: 'utf8' })
-          sendEvent({ status: `Texto extraído (${textoCompleto.length} caracteres)` })
-        } catch (pdfError) {
-          sendEvent({ error: 'No se pudo extraer texto del PDF' })
-          controller.close()
-          return
+          const pdfInfo = execSync(`pdfinfo "${pdfPath}"`, { encoding: 'utf8' })
+          const pagesMatch = pdfInfo.match(/Pages:\s+(\d+)/)
+          if (pagesMatch) {
+            numPaginas = parseInt(pagesMatch[1])
+          }
+        } catch (e) {
+          console.log('No se pudo obtener info del PDF, asumiendo 1 página')
         }
 
-        if (!textoCompleto || textoCompleto.trim().length === 0) {
-          sendEvent({ error: 'El PDF no contiene texto extraíble' })
-          controller.close()
-          return
-        }
+        sendEvent({ status: `PDF tiene ${numPaginas} página(s)` })
 
-        sendEvent({ status: 'Procesando con DeepSeek...' })
+        // Procesar página por página
+        const todosLosProductos = []
+        
+        for (let pagina = 1; pagina <= numPaginas; pagina++) {
+          sendEvent({ status: `Procesando página ${pagina}/${numPaginas}...` })
+          
+          let textoPagina = ''
+          try {
+            textoPagina = execSync(`pdftotext -layout -f ${pagina} -l ${pagina} "${pdfPath}" -`, { encoding: 'utf8' })
+          } catch (pdfError) {
+            sendEvent({ status: `Error extrayendo página ${pagina}, continuando...` })
+            continue
+          }
 
-        const prompt = `Extrae TODOS los productos de esta factura. Lee cada línea cuidadosamente.
+          if (!textoPagina || textoPagina.trim().length === 0) {
+            sendEvent({ status: `Página ${pagina} vacía, continuando...` })
+            continue
+          }
 
-${textoCompleto}
+          sendEvent({ status: `Analizando página ${pagina} con el sistema...` })
+
+          const prompt = `Extrae TODOS los productos de esta página de factura. Lee cada línea cuidadosamente.
+
+${textoPagina}
 
 Responde SOLO con JSON válido:
-{"productos": [{"descripcion": "nombre", "cantidad": 10, "precio": 5.50}]}`
+{"productos": [{"descripcion": "nombre", "cantidad": 10, "precio": 5.50}]}
 
-        let response
-        let intentos = 0
-        const maxIntentos = 3
-        
-        while (intentos < maxIntentos) {
+Si no hay productos en esta página, responde: {"productos": []}`
+
+          let response
+          let intentos = 0
+          const maxIntentos = 3
+          
+          while (intentos < maxIntentos) {
+            try {
+              intentos++
+              if (intentos > 1) {
+                sendEvent({ status: `Reintentando página ${pagina}... (${intentos}/${maxIntentos})` })
+                await new Promise(resolve => setTimeout(resolve, 2000 * intentos))
+              }
+              
+              const stream = await openai.chat.completions.create({
+                model: "deepseek-chat",
+                messages: [{ role: "user", content: prompt }],
+                stream: true,
+                temperature: 0,
+                max_tokens: 9000
+              })
+              
+              let fullContent = ''
+              for await (const chunk of stream) {
+                const content = chunk.choices[0]?.delta?.content || ''
+                fullContent += content
+              }
+              
+              response = {
+                choices: [{
+                  message: {
+                    content: fullContent
+                  }
+                }]
+              }
+              
+              break
+              
+            } catch (apiError) {
+              console.error(`Error API página ${pagina} (intento ${intentos}):`, apiError)
+              
+              if (intentos >= maxIntentos) {
+                sendEvent({ status: `Error en página ${pagina}, continuando con siguiente...` })
+                response = null
+                break
+              }
+            }
+          }
+
+          if (!response) continue
+
+          // Procesar respuesta de esta página
           try {
-            intentos++
-            if (intentos > 1) {
-              sendEvent({ status: `Reintentando... (${intentos}/${maxIntentos})` })
-              await new Promise(resolve => setTimeout(resolve, 2000 * intentos))
+            let content = response.choices[0].message.content
+            content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+            
+            const jsonMatch = content.match(/\{[\s\S]*\}/)
+            let jsonStr = jsonMatch ? jsonMatch[0] : content
+            
+            if (!jsonStr.endsWith('}')) {
+              const lastCompleteProduct = jsonStr.lastIndexOf('},')
+              if (lastCompleteProduct > 0) {
+                jsonStr = jsonStr.substring(0, lastCompleteProduct + 1) + ']}'
+              } else {
+                jsonStr = jsonStr + ']}'
+              }
             }
             
-            // Usar streaming para evitar timeouts con respuestas largas
-            const stream = await openai.chat.completions.create({
-              model: "deepseek-chat",
-              messages: [{ role: "user", content: prompt }],
-              stream: true,
-              temperature: 0,
-              max_tokens: 9000
-            })
+            const resultadoPagina = JSON.parse(jsonStr)
             
-            // Recolectar la respuesta completa del stream
-            let fullContent = ''
-            for await (const chunk of stream) {
-              const content = chunk.choices[0]?.delta?.content || ''
-              fullContent += content
-            }
-            
-            // Crear objeto de respuesta compatible
-            response = {
-              choices: [{
-                message: {
-                  content: fullContent
+            if (resultadoPagina.productos && resultadoPagina.productos.length > 0) {
+              // Procesar y agregar productos de esta página
+              const productosNuevos = resultadoPagina.productos.map(p => {
+                const cantidad = parseFloat(p.cantidad)
+                const precio = parseFloat(p.precio)
+                
+                if (isNaN(cantidad) || isNaN(precio) || cantidad <= 0 || precio <= 0) {
+                  return null
                 }
-              }]
-            }
-            
-            // Si llegamos aquí, la llamada fue exitosa
-            break
-            
-          } catch (apiError) {
-            console.error(`Error API (intento ${intentos}):`, apiError)
-            
-            if (intentos >= maxIntentos) {
-              sendEvent({ error: `Error de API después de ${maxIntentos} intentos. Por favor, intenta de nuevo.` })
-              controller.close()
-              return
-            }
-          }
-        }
-
-        sendEvent({ status: 'Procesando respuesta...' })
-
-        let resultado
-        try {
-          let content = response.choices[0].message.content
-          
-          // Limpiar markdown y texto adicional
-          content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '')
-          content = content.trim()
-          
-          // Intentar extraer JSON si viene con texto adicional
-          const jsonMatch = content.match(/\{[\s\S]*\}/)
-          let jsonStr = jsonMatch ? jsonMatch[0] : content
-          
-          // Si el JSON está incompleto, intentar repararlo
-          if (!jsonStr.endsWith('}')) {
-            // Buscar el último producto completo
-            const lastCompleteProduct = jsonStr.lastIndexOf('},')
-            if (lastCompleteProduct > 0) {
-              jsonStr = jsonStr.substring(0, lastCompleteProduct + 1) + ']}'
+                
+                const total = cantidad * precio
+                
+                return {
+                  descripcion: p.descripcion,
+                  cantidad: cantidad.toString(),
+                  precio: precio.toFixed(2),
+                  total: total.toFixed(2)
+                }
+              }).filter(p => p !== null)
+              
+              todosLosProductos.push(...productosNuevos)
+              
+              // Enviar productos parciales en tiempo real
+              sendEvent({ 
+                status: `Página ${pagina}: ${productosNuevos.length} productos encontrados`,
+                partialResult: {
+                  productos: [...todosLosProductos],
+                  pagina: pagina,
+                  totalPaginas: numPaginas
+                }
+              })
             } else {
-              jsonStr = jsonStr + ']}'
+              sendEvent({ status: `Página ${pagina}: sin productos` })
             }
+            
+          } catch (parseError) {
+            console.error(`Error parseando página ${pagina}:`, parseError)
+            sendEvent({ status: `Error procesando página ${pagina}, continuando...` })
           }
-          
-          resultado = JSON.parse(jsonStr)
-          sendEvent({ status: `Extraídos ${resultado.productos?.length || 0} productos` })
-        } catch (parseError) {
-          console.error('Error parseando:', parseError)
-          console.error('Respuesta:', response.choices[0].message.content.substring(0, 500))
-          sendEvent({ error: 'Error procesando respuesta. Intenta con un PDF más pequeño.' })
-          controller.close()
-          return
         }
-        
-        if (!resultado.productos || resultado.productos.length === 0) {
+
+        sendEvent({ status: 'Consolidando resultados...' })
+
+        if (todosLosProductos.length === 0) {
           sendEvent({ error: 'No se encontraron productos en el PDF' })
           controller.close()
           return
         }
 
-        const productos = resultado.productos.map(p => {
-          const cantidad = parseFloat(p.cantidad)
-          const precio = parseFloat(p.precio)
-          
-          if (isNaN(cantidad) || isNaN(precio) || cantidad <= 0 || precio <= 0) {
-            return null
-          }
-          
-          const total = cantidad * precio
-          
-          return {
-            descripcion: p.descripcion,
-            cantidad: cantidad.toString(),
-            precio: precio.toFixed(2),
-            total: total.toFixed(2)
-          }
-        }).filter(p => p !== null)
-
-        const totalGeneral = productos.reduce((sum, p) => sum + parseFloat(p.total), 0)
+        const totalGeneral = todosLosProductos.reduce((sum, p) => sum + parseFloat(p.total), 0)
 
         sendEvent({ 
           status: 'Completado',
           result: {
-            productos,
+            productos: todosLosProductos,
             total_general: totalGeneral.toFixed(2),
             moneda: 'USD'
           }
@@ -218,4 +244,4 @@ Responde SOLO con JSON válido:
   })
 }
 
-export const maxDuration = 60
+export const maxDuration = 300 // 5 minutos para PDFs grandes
